@@ -13,8 +13,8 @@ use std::ffi::{c_char, CString};
 use std::ptr::null;
 
 use crate::common::{
-    cstring_array_to_string_vec, json_to_object_ptr, object_ptr_to_json, vec_u8_to_cboxedbuffer,
-    CBoxedBuffer,
+    c_str_to_str, cstring_array_to_string_vec, json_to_object_ptr, object_ptr_to_json,
+    string_vec_to_str_vec, vec_u8_to_cboxedbuffer, CBoxedBuffer,
 };
 use crate::{free_impl, from_json_impl, set_last_error, to_json_impl};
 
@@ -44,8 +44,9 @@ pub unsafe extern "C" fn rabe_cp_bsw_generate_secret_key(
     let public_key = (public_key as *const CpAbePublicKey).as_ref();
     if let (Some(master_key), Some(public_key)) = (master_key, public_key) {
         let attrs = cstring_array_to_string_vec(attr, attr_len);
-        let key = keygen(public_key, master_key, &attrs);
-        if let Some(key) = key {
+        let attr_refs = string_vec_to_str_vec(&attrs);
+        // rabe 0.4.x: keygen returns Option
+        if let Some(key) = keygen(public_key, master_key, &attr_refs) {
             Box::into_raw(Box::new(key)) as *const c_void
         } else {
             set_last_error!("Failed to generate secret key");
@@ -66,17 +67,17 @@ pub unsafe extern "C" fn rabe_cp_bsw_encrypt(
 ) -> *const c_void {
     let public_key = (public_key as *const CpAbePublicKey).as_ref();
     if let Some(public_key) = public_key {
-        let policy_len = libc::strlen(policy);
-        let policy = String::from_raw_parts(policy as *mut u8, policy_len, policy_len);
-        let plain_text = Vec::from_raw_parts(text as *mut u8, text_length, text_length);
+        // Safe: borrow C string as &str instead of UB String::from_raw_parts
+        let policy_str = c_str_to_str(policy);
+        // Safe: borrow as slice instead of UB Vec::from_raw_parts
+        let plain_text = std::slice::from_raw_parts(text as *const u8, text_length);
+        // rabe 0.4.x: encrypt signature changed — policy before plaintext, added PolicyLanguage
         let cipher = encrypt(
             public_key,
-            &policy,
-            &plain_text,
+            &policy_str,
             PolicyLanguage::HumanPolicy,
+            plain_text,
         );
-        std::mem::forget(policy);
-        std::mem::forget(plain_text);
         match cipher {
             Ok(cipher) => Box::into_raw(Box::new(cipher)) as *const c_void,
             Err(err) => {
@@ -103,7 +104,7 @@ pub unsafe extern "C" fn rabe_cp_bsw_decrypt(
             Ok(text) => vec_u8_to_cboxedbuffer(text),
             Err(err) => {
                 set_last_error!(err);
-                CBoxedBuffer::default()
+                CBoxedBuffer::null()
             }
         }
     } else {

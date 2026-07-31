@@ -13,8 +13,8 @@ use std::ffi::{c_char, CString};
 use std::ptr::null;
 
 use crate::common::{
-    cstring_array_to_string_vec, json_to_object_ptr, object_ptr_to_json, vec_u8_to_cboxedbuffer,
-    CBoxedBuffer,
+    c_str_to_str, cstring_array_to_string_vec, json_to_object_ptr, object_ptr_to_json,
+    string_vec_to_str_vec, vec_u8_to_cboxedbuffer, CBoxedBuffer,
 };
 use crate::{free_impl, from_json_impl, set_last_error, to_json_impl};
 
@@ -42,11 +42,9 @@ pub unsafe extern "C" fn rabe_kp_lsw_generate_secret_key(
     let master_key = (master_key as *const KpAbeMasterKey).as_ref();
     let public_key = (public_key as *const KpAbePublicKey).as_ref();
     if let (Some(master_key), Some(public_key)) = (master_key, public_key) {
-        let policy_len = libc::strlen(policy);
-        let policy = String::from_raw_parts(policy as *mut u8, policy_len, policy_len);
-        let key = keygen(public_key, master_key, &policy, PolicyLanguage::HumanPolicy);
-        std::mem::forget(policy);
-        match key {
+        // Safe: borrow C string as &str
+        let policy_str = c_str_to_str(policy);
+        match keygen(public_key, master_key, &policy_str, PolicyLanguage::HumanPolicy) {
             Ok(key) => Box::into_raw(Box::new(key)) as *const c_void,
             Err(err) => {
                 set_last_error!(err);
@@ -70,16 +68,18 @@ pub unsafe extern "C" fn rabe_kp_lsw_encrypt(
     let public_key = (public_key as *const KpAbePublicKey).as_ref();
     if let Some(public_key) = public_key {
         let attrs = cstring_array_to_string_vec(attrs, attr_len);
-        let cipher = encrypt(
+        let attr_refs = string_vec_to_str_vec(&attrs);
+        // rabe 0.4.x: encrypt returns Result instead of Option
+        match encrypt(
             public_key,
-            &attrs,
+            &attr_refs,
             std::slice::from_raw_parts(text as *const u8, text_length),
-        );
-        if let Some(cipher) = cipher {
-            Box::into_raw(Box::new(cipher)) as *const c_void
-        } else {
-            set_last_error!("Failed to encrypt");
-            null()
+        ) {
+            Ok(cipher) => Box::into_raw(Box::new(cipher)) as *const c_void,
+            Err(err) => {
+                set_last_error!(err);
+                null()
+            }
         }
     } else {
         set_last_error!("Invalid public key");
@@ -100,7 +100,7 @@ pub unsafe extern "C" fn rabe_kp_lsw_decrypt(
             Ok(text) => vec_u8_to_cboxedbuffer(text),
             Err(err) => {
                 set_last_error!(err);
-                CBoxedBuffer::default()
+                CBoxedBuffer::null()
             }
         }
     } else {
@@ -108,11 +108,6 @@ pub unsafe extern "C" fn rabe_kp_lsw_decrypt(
         CBoxedBuffer::null()
     }
 }
-
-// KpAbeCiphertext,
-// KpAbeMasterKey,
-// KpAbePublicKey,
-// KpAbeSecretKey,
 
 to_json_impl! {
     rabe_kp_lsw_master_key_to_json,KpAbeMasterKey,

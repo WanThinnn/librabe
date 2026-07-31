@@ -9,7 +9,10 @@ thread_local! {
 macro_rules! set_last_error {
     ($msg:expr) => {
         THREAD_LAST_ERROR.with(|e| {
-            e.set(CString::from_vec_unchecked(($msg.to_string().into_bytes())));
+            let msg_bytes = $msg.to_string().into_bytes();
+            // Filter out any interior null bytes for safety
+            let filtered: Vec<u8> = msg_bytes.into_iter().filter(|&b| b != 0).collect();
+            e.set(CString::new(filtered).unwrap_or_default());
         });
     };
 }
@@ -40,7 +43,15 @@ pub(crate) unsafe fn object_ptr_to_json<T: Serialize>(ptr: *const c_void) -> *mu
     if let Some(value) = value {
         let json = serde_json::to_string(value);
         match json {
-            Ok(json) => CString::from_vec_unchecked(json.into_bytes()).into_raw(),
+            Ok(json) => {
+                match CString::new(json) {
+                    Ok(cstr) => cstr.into_raw(),
+                    Err(_) => {
+                        set_last_error!("JSON contains null bytes");
+                        std::ptr::null_mut()
+                    }
+                }
+            }
             Err(err) => {
                 set_last_error!(err);
                 std::ptr::null_mut()
@@ -53,6 +64,10 @@ pub(crate) unsafe fn object_ptr_to_json<T: Serialize>(ptr: *const c_void) -> *mu
 }
 
 pub(crate) unsafe fn json_to_object_ptr<T: DeserializeOwned>(json: *const c_char) -> *const c_void {
+    if json.is_null() {
+        set_last_error!("Null JSON pointer");
+        return std::ptr::null();
+    }
     let object = serde_json::from_slice::<T>(CStr::from_ptr(json).to_bytes());
     match object {
         Ok(object) => Box::into_raw(Box::new(object)) as *const c_void,
@@ -86,27 +101,49 @@ pub(crate) unsafe fn vec_u8_to_cboxedbuffer(mut array: Vec<u8>) -> CBoxedBuffer 
     }
 }
 
+/// Safely convert a C string pointer to a borrowed Rust &str.
+/// Returns an empty string if the pointer is null or the content is not valid UTF-8.
+pub(crate) unsafe fn c_str_to_str<'a>(ptr: *const c_char) -> &'a str {
+    if ptr.is_null() {
+        return "";
+    }
+    CStr::from_ptr(ptr).to_str().unwrap_or("")
+}
+
+/// Convert a Vec<String> to Vec<&str> for passing to rabe 0.4.x API functions
+/// which expect &[&str] instead of &[String].
+pub(crate) fn string_vec_to_str_vec(v: &[String]) -> Vec<&str> {
+    v.iter().map(|s| s.as_str()).collect()
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn rabe_free_json(json: *mut c_char) {
-    let _ = Box::from_raw(json);
+    if !json.is_null() {
+        // CString::into_raw() was used to create this pointer,
+        // so we must use CString::from_raw() to free it correctly.
+        let _ = CString::from_raw(json);
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn rabe_get_thread_last_error() -> *const c_char {
     THREAD_LAST_ERROR.with(|e| {
         let error_msg = e.take();
-        e.set(error_msg.clone());
-        error_msg.into_raw()
+        let ptr = error_msg.as_ptr();
+        e.set(error_msg);
+        ptr
     })
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn rabe_free_boxed_buffer(result: CBoxedBuffer) {
-    let _ = Vec::from_raw_parts(
-        result.buffer as *mut u8,
-        result.len as usize,
-        result.len as usize,
-    );
+    if !result.buffer.is_null() && result.len > 0 {
+        let _ = Vec::from_raw_parts(
+            result.buffer as *mut u8,
+            result.len as usize,
+            result.len as usize,
+        );
+    }
 }
 
 #[macro_export]
@@ -137,7 +174,9 @@ macro_rules! free_impl {
         $(
             #[no_mangle]
             pub unsafe extern "C" fn $name(ptr: *const c_void){
-                let _ = Box::from_raw(ptr as *mut $t);
+                if !ptr.is_null() {
+                    let _ = Box::from_raw(ptr as *mut $t);
+                }
             }
         )*
     };

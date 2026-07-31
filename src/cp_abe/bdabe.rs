@@ -14,7 +14,7 @@ use std::ffi::{c_char, CString};
 use std::ffi::{c_void, CStr};
 use std::ptr::null;
 
-use crate::common::{json_to_object_ptr, object_ptr_to_json, vec_u8_to_cboxedbuffer, CBoxedBuffer};
+use crate::common::{c_str_to_str, json_to_object_ptr, object_ptr_to_json, vec_u8_to_cboxedbuffer, CBoxedBuffer};
 use crate::{free_impl, from_json_impl, set_last_error, to_json_impl};
 
 #[repr(C)]
@@ -133,10 +133,16 @@ pub unsafe extern "C" fn rabe_cp_bdabe_add_attribute_to_user_key(
     if let Some(secret_authority_key) = secret_authority_key {
         let attr = CStr::from_ptr(attr).to_string_lossy().to_string();
         if let Some(user_key) = (user_key as *mut BdabeUserKey).as_mut() {
-            user_key
-                ._ska
-                .push(request_attribute_sk(&user_key._pk, secret_authority_key, &attr).unwrap());
-            return 0;
+            match request_attribute_sk(&user_key.pk, secret_authority_key, &attr) {
+                Ok(sk) => {
+                    user_key.sk_a.push(sk);
+                    return 0;
+                }
+                Err(err) => {
+                    set_last_error!(err);
+                    return -1;
+                }
+            }
         }
     }
     set_last_error!("Invalid secret authority key or user key");
@@ -154,27 +160,20 @@ pub unsafe extern "C" fn rabe_cp_bdabe_encrypt(
 ) -> *const c_void {
     let public_key = (public_key as *const BdabePublicKey).as_ref();
     if let Some(public_key) = public_key {
-        let policy_len = libc::strlen(policy);
-        let policy = String::from_raw_parts(policy as *mut u8, policy_len, policy_len);
-        let public_attribute_keys =
+        // Safe: borrow C string as &str
+        let policy_str = c_str_to_str(policy);
+        let public_attribute_keys_refs: Vec<&BdabePublicAttributeKey> =
             std::slice::from_raw_parts(public_attribute_keys, public_attribute_keys_len)
                 .iter()
-                .map(|x| (*x as *mut BdabePublicAttributeKey).read())
-                .collect::<Vec<_>>();
+                .filter_map(|x| (*x as *const BdabePublicAttributeKey).as_ref())
+                .collect();
         let cipher = encrypt(
             public_key,
-            &public_attribute_keys,
-            &policy,
-            std::slice::from_raw_parts(text as *const u8, text_length),
+            &public_attribute_keys_refs,
+            &policy_str,
             PolicyLanguage::HumanPolicy,
+            std::slice::from_raw_parts(text as *const u8, text_length),
         );
-        std::mem::forget(policy);
-        let _ = Vec::from_raw_parts(
-            public_attribute_keys.as_ptr() as *mut *const c_void,
-            public_attribute_keys.len(),
-            public_attribute_keys.capacity(),
-        );
-        std::mem::forget(public_attribute_keys);
         match cipher {
             Ok(cipher) => Box::into_raw(Box::new(cipher)) as *const c_void,
             Err(err) => {
@@ -197,8 +196,8 @@ pub unsafe extern "C" fn rabe_cp_bdabe_decrypt(
     let cipher = (cipher as *const BdabeCiphertext).as_ref();
     let public_key = (public_key as *const BdabePublicKey).as_ref();
     let user_key = (user_key as *const BdabeUserKey).as_ref();
-    if let (Some(cipher), Some(public_key), Some(user_key)) = (cipher, public_key, user_key) {
-        let text = decrypt(public_key, user_key, cipher);
+    if let (Some(cipher), Some(_public_key), Some(user_key)) = (cipher, public_key, user_key) {
+        let text = decrypt(user_key, cipher);
         match text {
             Ok(text) => vec_u8_to_cboxedbuffer(text),
             Err(err) => {
@@ -270,22 +269,6 @@ mod test {
     #[test]
     fn test() {
         unsafe {
-            // use rabe::schemes::bdabe::*;
-            // use rabe::utils::policy::pest::PolicyLanguage;
-            // let (_pk, _msk) = setup();
-            //
-            // let _a1_key = authgen(&_pk, &_msk, &String::from("aa1"));
-            // let mut _u_key = keygen(&_pk, &_a1_key, &String::from("u1"));
-            // let _att1 = String::from("aa1::A");
-            // let _att1_pk = request_attribute_pk(&_pk, &_a1_key, &_att1).unwrap();
-            // _u_key._ska.push(request_attribute_sk(&_u_key._pk, &_a1_key, &_att1).unwrap());
-            // let _plaintext = String::from("our plaintext!").into_bytes();
-            // let _policy = String::from(r#""aa1::A" or "aa1::B""#);
-            // let _ct: BdabeCiphertext = encrypt(&_pk, &vec![_att1_pk], &_policy, &_plaintext, PolicyLanguage::HumanPolicy).unwrap();
-            // let _match = decrypt(&_pk, &_u_key, &_ct);
-            // assert_eq!(_match.is_ok(), true);
-            // assert_eq!(_match.unwrap(), _plaintext);
-
             //generate public key and master key
             let key = rabe_cp_bdabe_init();
             let public_key = key.public_key;

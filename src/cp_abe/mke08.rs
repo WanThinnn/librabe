@@ -14,7 +14,7 @@ use std::ffi::{c_char, CString};
 use std::ffi::{c_void, CStr};
 use std::ptr::null;
 
-use crate::common::{json_to_object_ptr, object_ptr_to_json, vec_u8_to_cboxedbuffer, CBoxedBuffer};
+use crate::common::{c_str_to_str, json_to_object_ptr, object_ptr_to_json, vec_u8_to_cboxedbuffer, CBoxedBuffer};
 use crate::{free_impl, from_json_impl, set_last_error, to_json_impl};
 
 #[repr(C)]
@@ -69,10 +69,16 @@ pub unsafe extern "C" fn rabe_cp_mke08_add_attribute_to_user_key(
     if let Some(secret_authority_key) = secret_authority_key {
         let attr = CStr::from_ptr(attr).to_string_lossy().to_string();
         if let Some(user_key) = (user_key as *mut Mke08UserKey).as_mut() {
-            user_key
-                ._sk_a
-                .push(request_authority_sk(&attr, secret_authority_key, &user_key._pk_u).unwrap());
-            return 0;
+            match request_authority_sk(&user_key.pk, &attr, secret_authority_key) {
+                Ok(sk) => {
+                    user_key.sk_a.push(sk);
+                    return 0;
+                }
+                Err(err) => {
+                    set_last_error!(err);
+                    return -1;
+                }
+            }
         }
     }
     set_last_error!("Invalid secret authority key");
@@ -114,28 +120,21 @@ pub unsafe extern "C" fn rabe_cp_mke08_encrypt(
 ) -> *const c_void {
     let public_key = (public_key as *const Mke08PublicKey).as_ref();
     if let Some(public_key) = public_key {
-        let policy_len = libc::strlen(policy);
-        let policy = String::from_raw_parts(policy as *mut u8, policy_len, policy_len);
+        // Safe: borrow C string as &str
+        let policy_str = c_str_to_str(policy);
         let attr_slice =
             std::slice::from_raw_parts(public_attribute_keys, public_attribute_keys_len);
-        let public_attribute_keys = attr_slice
+        let public_attribute_keys_refs: Vec<&Mke08PublicAttributeKey> = attr_slice
             .iter()
-            .map(|x| (*x as *mut Mke08PublicAttributeKey).read())
-            .collect::<Vec<_>>();
+            .filter_map(|x| (*x as *const Mke08PublicAttributeKey).as_ref())
+            .collect();
         let cipher = encrypt(
             public_key,
-            &public_attribute_keys,
-            &policy,
+            &public_attribute_keys_refs,
+            &policy_str,
             PolicyLanguage::HumanPolicy,
             std::slice::from_raw_parts(text as *const u8, text_length),
         );
-        std::mem::forget(policy);
-        let _ = Vec::from_raw_parts(
-            public_attribute_keys.as_ptr() as *mut *const c_void,
-            public_attribute_keys.len(),
-            public_attribute_keys.capacity(),
-        );
-        std::mem::forget(public_attribute_keys);
         match cipher {
             Ok(cipher) => Box::into_raw(Box::new(cipher)) as *const c_void,
             Err(err) => {
@@ -158,13 +157,13 @@ pub unsafe extern "C" fn rabe_cp_mke08_decrypt(
     let cipher = (cipher as *const Mke08Ciphertext).as_ref();
     let public_key = (public_key as *const Mke08PublicKey).as_ref();
     let user_key = (user_key as *const Mke08UserKey).as_ref();
-    if let (Some(cipher), Some(public_key), Some(user_key)) = (cipher, public_key, user_key) {
-        let text = decrypt(public_key, user_key, cipher);
+    if let (Some(cipher), Some(_public_key), Some(user_key)) = (cipher, public_key, user_key) {
+        let text = decrypt(user_key, cipher);
         match text {
             Ok(text) => vec_u8_to_cboxedbuffer(text),
             Err(err) => {
                 set_last_error!(err);
-                CBoxedBuffer::default()
+                CBoxedBuffer::null()
             }
         }
     } else {
@@ -172,15 +171,7 @@ pub unsafe extern "C" fn rabe_cp_mke08_decrypt(
         CBoxedBuffer::null()
     }
 }
-// Mke08Ciphertext,
-// Mke08MasterKey,
-// Mke08PublicAttributeKey,
-// Mke08PublicKey,
-// Mke08PublicUserKey,
-// Mke08SecretAttributeKey,
-// Mke08SecretAuthorityKey,
-// Mke08SecretUserKey,
-// Mke08UserKey,
+
 to_json_impl! {
     rabe_cp_mke08_master_key_to_json,Mke08MasterKey,
     rabe_cp_mke08_public_key_to_json,Mke08PublicKey,
@@ -238,23 +229,6 @@ mod test {
     #[test]
     fn test() {
         unsafe {
-            // use rabe::schemes::mke08::*;
-            // use rabe::utils::policy::pest::PolicyLanguage;
-            // let (_pk, _msk) = setup();
-            // let mut _u_key = keygen(&_pk, &_msk, &String::from("user1"));
-            // let _att1 = String::from("aa1::A");
-            // let _att2 = String::from("aa2::B");
-            // let _a1_key = authgen(&String::from("aa1"));
-            // let _a2_key = authgen(&String::from("aa2"));
-            // let _att1_pk = request_authority_pk(&_pk, &_att1, &_a1_key).unwrap();
-            // let _att2_pk = request_authority_pk(&_pk, &_att2, &_a2_key).unwrap();
-            // _u_key._sk_a.push(request_authority_sk(&_att1, &_a1_key, &_u_key._pk_u).unwrap());
-            // _u_key._sk_a.push(request_authority_sk(&_att2, &_a2_key, &_u_key._pk_u).unwrap());
-            // let _plaintext = String::from("our plaintext!").into_bytes();
-            // let _policy = String::from(r#""aa1::A" and "aa2::B""#);
-            // let _ct: Mke08Ciphertext = encrypt(&_pk, &vec![_att1_pk, _att2_pk], &_policy, PolicyLanguage::HumanPolicy, &_plaintext).unwrap();
-            // assert_eq!(decrypt(&_pk, &_u_key, &_ct).unwrap(), _plaintext);
-
             //generate public and master key
             let key = rabe_cp_mke08_init();
             let public_key = key.public_key;

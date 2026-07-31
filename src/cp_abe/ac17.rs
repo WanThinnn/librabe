@@ -37,12 +37,14 @@ pub unsafe extern "C" fn rabe_cp_ac17_generate_secret_key(
     let master_key = (master_key as *const Ac17MasterKey).as_ref();
     if let Some(master_key) = master_key {
         let attrs = cstring_array_to_string_vec(attr, attr_len);
-        let key = cp_keygen(master_key, &attrs);
-        if let Some(key) = key {
-            Box::into_raw(Box::new(key)) as *const c_void
-        } else {
-            set_last_error!("Failed to generate secret key");
-            null()
+        let attr_refs = string_vec_to_str_vec(&attrs);
+        // rabe 0.4.x: cp_keygen returns Result instead of Option
+        match cp_keygen(master_key, &attr_refs) {
+            Ok(key) => Box::into_raw(Box::new(key)) as *const c_void,
+            Err(err) => {
+                set_last_error!(err);
+                null()
+            }
         }
     } else {
         null()
@@ -58,15 +60,15 @@ pub unsafe extern "C" fn rabe_cp_ac17_encrypt(
 ) -> *const c_void {
     let public_key = (public_key as *const Ac17PublicKey).as_ref();
     if let Some(public_key) = public_key {
-        let policy_len = libc::strlen(policy);
-        let policy = String::from_raw_parts(policy as *mut u8, policy_len, policy_len);
+        // Safe: borrow the C string as &str instead of creating an owned String via from_raw_parts
+        let policy_str = c_str_to_str(policy);
+        let plaintext = std::slice::from_raw_parts(text as *const u8, text_length);
         let cipher = cp_encrypt(
             public_key,
-            &policy,
-            std::slice::from_raw_parts(text as *const u8, text_length),
+            &policy_str,
+            plaintext,
             PolicyLanguage::HumanPolicy,
         );
-        std::mem::forget(policy);
         match cipher {
             Ok(cipher) => Box::into_raw(Box::new(cipher)) as *const c_void,
             Err(err) => {

@@ -13,8 +13,8 @@ use std::ffi::{c_char, CString};
 use std::ptr::null;
 
 use crate::common::{
-    cstring_array_to_string_vec, json_to_object_ptr, object_ptr_to_json, vec_u8_to_cboxedbuffer,
-    CBoxedBuffer,
+    c_str_to_str, cstring_array_to_string_vec, json_to_object_ptr, object_ptr_to_json,
+    string_vec_to_str_vec, vec_u8_to_cboxedbuffer, CBoxedBuffer,
 };
 use crate::{free_impl, from_json_impl, set_last_error, to_json_impl};
 
@@ -30,7 +30,8 @@ pub unsafe extern "C" fn rabe_kp_yct14_init(
     attr_len: usize,
 ) -> Yct14AbeSetupResult {
     let attrs = cstring_array_to_string_vec(attrs, attr_len);
-    let (public_key, master_key) = setup(attrs);
+    let attr_refs = string_vec_to_str_vec(&attrs);
+    let (public_key, master_key) = setup(attr_refs);
     Yct14AbeSetupResult {
         master_key: Box::into_raw(Box::new(master_key)) as *const c_void,
         public_key: Box::into_raw(Box::new(public_key)) as *const c_void,
@@ -45,12 +46,11 @@ pub unsafe extern "C" fn rabe_kp_yct14_generate_secret_key(
 ) -> *const c_void {
     let master_key = (master_key as *const Yct14AbeMasterKey).as_ref();
     let public_key = (public_key as *const Yct14AbePublicKey).as_ref();
-    if let (Some(master_key), Some(public_key)) = (master_key, public_key) {
-        let policy_len = libc::strlen(policy);
-        let policy = String::from_raw_parts(policy as *mut u8, policy_len, policy_len);
-        let key = keygen(public_key, master_key, &policy, PolicyLanguage::HumanPolicy);
-        std::mem::forget(policy);
-        match key {
+    if let (Some(master_key), Some(_public_key)) = (master_key, public_key) {
+        // Safe: borrow C string as &str
+        let policy_str = c_str_to_str(policy);
+        let policy_string = policy_str.to_string();
+        match keygen(master_key, &policy_string, PolicyLanguage::HumanPolicy) {
             Ok(key) => Box::into_raw(Box::new(key)) as *const c_void,
             Err(err) => {
                 set_last_error!(err);
@@ -74,12 +74,13 @@ pub unsafe extern "C" fn rabe_kp_yct14_encrypt(
     let public_key = (public_key as *const Yct14AbePublicKey).as_ref();
     if let Some(public_key) = public_key {
         let attrs = cstring_array_to_string_vec(attrs, attr_len);
-        let cipher = encrypt(
+        let attr_refs = string_vec_to_str_vec(&attrs);
+        // rabe 0.4.x: encrypt returns Result
+        match encrypt(
             public_key,
-            &attrs,
+            &attr_refs,
             std::slice::from_raw_parts(text as *const u8, text_length),
-        );
-        match cipher {
+        ) {
             Ok(cipher) => Box::into_raw(Box::new(cipher)) as *const c_void,
             Err(err) => {
                 set_last_error!(err);
@@ -105,7 +106,7 @@ pub unsafe extern "C" fn rabe_kp_yct14_decrypt(
             Ok(text) => vec_u8_to_cboxedbuffer(text),
             Err(err) => {
                 set_last_error!(err);
-                CBoxedBuffer::default()
+                CBoxedBuffer::null()
             }
         }
     } else {
@@ -113,10 +114,7 @@ pub unsafe extern "C" fn rabe_kp_yct14_decrypt(
         CBoxedBuffer::null()
     }
 }
-// Yct14AbeCiphertext,
-// Yct14AbeMasterKey,
-// Yct14AbePublicKey,
-// Yct14AbeSecretKey,
+
 to_json_impl! {
     rabe_kp_yct14_ciphertext_to_json,Yct14AbeCiphertext,
     rabe_kp_yct14_master_key_to_json,Yct14AbeMasterKey,

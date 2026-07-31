@@ -3,8 +3,8 @@
 
 use crate::common::THREAD_LAST_ERROR;
 use crate::common::{
-    cstring_array_to_string_vec, json_to_object_ptr, object_ptr_to_json, vec_u8_to_cboxedbuffer,
-    CBoxedBuffer,
+    c_str_to_str, cstring_array_to_string_vec, json_to_object_ptr, object_ptr_to_json,
+    string_vec_to_str_vec, vec_u8_to_cboxedbuffer, CBoxedBuffer,
 };
 use crate::{free_impl, from_json_impl, set_last_error, to_json_impl};
 use rabe::schemes::aw11::{
@@ -47,11 +47,12 @@ pub unsafe extern "C" fn rabe_cp_aw11_generate_auth(
     let global_key = (global_key as *const Aw11GlobalKey).as_ref();
     if let Some(global_key) = global_key {
         let attrs = cstring_array_to_string_vec(attrs, attr_len);
-        let key = authgen(global_key, &attrs);
-        if let Some(key) = key {
+        let attr_refs = string_vec_to_str_vec(&attrs);
+        // rabe 0.4.x: authgen returns Option
+        if let Some((pk, msk)) = authgen(global_key, &attr_refs) {
             Aw11AuthGenResult {
-                master_key: Box::into_raw(Box::new(key.1)) as *const c_void,
-                public_key: Box::into_raw(Box::new(key.0)) as *const c_void,
+                master_key: Box::into_raw(Box::new(msk)) as *const c_void,
+                public_key: Box::into_raw(Box::new(pk)) as *const c_void,
             }
         } else {
             set_last_error!("Failed to generate auth key");
@@ -75,10 +76,10 @@ pub unsafe extern "C" fn rabe_cp_aw11_generate_secret_key(
     let master_key = (master_key as *const Aw11MasterKey).as_ref();
     if let (Some(global_key), Some(master_key)) = (global_key, master_key) {
         let attrs = cstring_array_to_string_vec(attrs, attr_len);
+        let attr_refs = string_vec_to_str_vec(&attrs);
         let name = CStr::from_ptr(name).to_string_lossy().to_string();
-        let key = keygen(global_key, master_key, &name, &attrs);
-        std::mem::forget(name);
-        match key {
+        // rabe 0.4.x: keygen returns Result
+        match keygen(global_key, master_key, &name, &attr_refs) {
             Ok(key) => Box::into_raw(Box::new(key)) as *const c_void,
             Err(err) => {
                 set_last_error!(err);
@@ -102,21 +103,21 @@ pub unsafe extern "C" fn rabe_cp_aw11_encrypt(
 ) -> *const c_void {
     let global_key = (global_key as *const Aw11GlobalKey).as_ref();
     if let Some(global_key) = global_key {
-        let policy_len = libc::strlen(policy);
-        let policy = String::from_raw_parts(policy as *mut u8, policy_len, policy_len);
-        let public_keys = std::slice::from_raw_parts(public_keys, public_keys_len)
+        // Safe: borrow C string as &str
+        let policy_str = c_str_to_str(policy);
+        // rabe 0.4.x: encrypt takes &[&Aw11PublicKey] instead of &Vec<Aw11PublicKey>
+        let pk_ptrs = std::slice::from_raw_parts(public_keys, public_keys_len);
+        let public_keys_refs: Vec<&Aw11PublicKey> = pk_ptrs
             .iter()
-            .map(|x| (*x as *const Aw11PublicKey).read())
-            .collect::<Vec<_>>();
+            .filter_map(|x| (*x as *const Aw11PublicKey).as_ref())
+            .collect();
         let cipher = encrypt(
             global_key,
-            &public_keys,
-            &policy,
+            &public_keys_refs,
+            &policy_str,
             PolicyLanguage::HumanPolicy,
             std::slice::from_raw_parts(text as *const u8, text_length),
         );
-        std::mem::forget(public_keys);
-        std::mem::forget(policy);
         match cipher {
             Ok(cipher) => Box::into_raw(Box::new(cipher)) as *const c_void,
             Err(err) => {
@@ -144,7 +145,7 @@ pub unsafe extern "C" fn rabe_cp_aw11_decrypt(
             Ok(text) => vec_u8_to_cboxedbuffer(text),
             Err(err) => {
                 set_last_error!(err);
-                Default::default()
+                CBoxedBuffer::null()
             }
         }
     } else {
