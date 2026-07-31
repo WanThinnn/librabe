@@ -344,8 +344,8 @@ mod test {
             rabe_free_boxed_buffer(result);
 
             rabe_cp_mke08_free_ciphertext(cipher);
-            rabe_cp_mke08_free_public_key(key.public_key);
-            rabe_cp_mke08_free_master_key(key.master_key);
+            rabe_cp_mke08_free_public_key(public_key);
+            rabe_cp_mke08_free_master_key(master_key);
             rabe_cp_mke08_free_user_key(user_key);
             rabe_cp_mke08_free_secret_authority_key(secret_authority_key);
             rabe_cp_mke08_free_secret_authority_key(secret_authority_key1);
