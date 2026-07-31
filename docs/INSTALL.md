@@ -4,7 +4,6 @@ C FFI binding for the [rabe](https://github.com/Fraunhofer-AISEC/rabe) (Attribut
 
 Repo: https://github.com/Aya0wind/Rabe-ffi
 
----
 
 ## Table of Contents
 
@@ -16,7 +15,6 @@ Repo: https://github.com/Aya0wind/Rabe-ffi
 - [Why Rust Nightly is Required](#why-rust-nightly-is-required)
 - [Security Notes](#security-notes)
 
----
 
 ## General Requirements
 
@@ -26,7 +24,6 @@ Regardless of Linux or Windows, the build process requires 3 components:
 2. **`cargo-expand`** — the build script (`build.rs`) uses `cbindgen` with `with_parse_expand`. This tool is needed to macro-expand the code before generating the `.h` header.
 3. **Linker + OS C build tools** (GCC/Clang on Linux/macOS, MSVC Build Tools on Windows).
 
----
 
 ## Build on Linux
 
@@ -94,7 +91,7 @@ LD_LIBRARY_PATH=/your/project/path ./your_app
 
 Alternatively, copy `librabe_ffi.so` to `/usr/local/lib` and run `sudo ldconfig` so you don't have to set `LD_LIBRARY_PATH` every time.
 
----
+
 
 ## Build on Windows (MSVC)
 
@@ -229,7 +226,7 @@ int main() {
 
 See more complete examples in the unit tests (`#[cfg(test)] mod test`) within the `src/cp_abe/` and `src/kp_abe/` files in the Rabe-ffi source code.
 
----
+
 
 ## Why Rust Nightly is Required
 
@@ -243,7 +240,7 @@ cbindgen::Builder::new()
 
 `with_parse_expand` requires macro-expanding the entire crate before generating the header (because the code uses macros like `to_json_impl!`, `from_json_impl!`, and `free_impl!` to generate C export functions — `cbindgen` cannot read the macro contents natively). This expansion requires `cargo-expand`, which depends on `-Z unpretty`, a feature only available in **nightly rustc**.
 
----
+
 
 ## Security Notes
 
