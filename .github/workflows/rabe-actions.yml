@@ -3,6 +3,8 @@ name: Rust
 on:
   push:
     branches: ["main"]
+    tags:
+      - 'v*' # Trigger build & release on tags like v1.0.0
   pull_request:
     branches: ["main"]
 
@@ -32,15 +34,46 @@ jobs:
         run: cargo build --release
       - name: Run tests
         run: cargo test --release
+        
+      # Unix (Mac/Linux): Pack files into tar.gz
+      - name: Package Artifacts (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          mkdir -p release_package
+          cp target/release/librabe_ffi.* release_package/ 2>/dev/null || true
+          cp rabe.h release_package/
+          tar -czvf rabe-ffi-${{ matrix.target }}.tar.gz -C release_package .
+          
+      # Windows: Pack files into zip
+      - name: Package Artifacts (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          mkdir release_package
+          Copy-Item target\release\rabe_ffi.* -Destination release_package -ErrorAction SilentlyContinue
+          Copy-Item rabe.h -Destination release_package
+          Compress-Archive -Path release_package\* -DestinationPath rabe-ffi-${{ matrix.target }}.zip
+          
       - uses: actions/upload-artifact@v4
         with:
           name: rabe-ffi-${{ matrix.target }}
           path: |
-            ./target/release/*.lib
-            ./target/release/*.so
-            ./target/release/*.dylib
-            ./target/release/*.dll
-            ./target/release/*.pdb
-            ./target/release/*.exp
-            ./target/release/*.a
-            ./rabe.h
+            rabe-ffi-*.tar.gz
+            rabe-ffi-*.zip
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') # Chỉ tạo Release khi push Tag (vd: v1.0.0)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-artifacts
+          merge-multiple: true
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: downloaded-artifacts/*
