@@ -34,8 +34,8 @@ cargo install cargo-expand
    ```
 2. Clone and build:
    ```bash
-   git clone https://github.com/WanThinnn/librabe.git
-   cd Rabe-ffi
+   git clone https://github.com/WanThinnn/librabe-ffi.git
+   cd librabe-ffi
    cargo build --release
    ```
 3. **Output**: You will find `librabe_ffi.so` (dynamic library), `librabe_ffi.a` (static library) in `target/release/`, and `rabe.h` (C header) in the project root.
@@ -48,8 +48,8 @@ cargo install cargo-expand
    ```
 2. Clone and build:
    ```bash
-   git clone https://github.com/WanThinnn/librabe.git
-   cd Rabe-ffi
+   git clone https://github.com/WanThinnn/librabe-ffi.git
+   cd librabe-ffi
    cargo build --release
    ```
 3. **Output**: You will find `librabe_ffi.dylib` (dynamic library), `librabe_ffi.a` (static library) in `target/release/`, and `rabe.h` in the project root.
@@ -60,8 +60,8 @@ cargo install cargo-expand
 2. Make sure you install Rust using PowerShell or CMD (do **not** use MSYS2/Git Bash to avoid mixing toolchains).
 3. Clone and build:
    ```powershell
-   git clone https://github.com/WanThinnn/librabe.git
-   cd Rabe-ffi
+   git clone https://github.com/WanThinnn/librabe-ffi.git
+   cd librabe-ffi
    cargo build --release
    ```
 4. **Output**: You will find `rabe_ffi.dll` (dynamic library), `rabe_ffi.dll.lib` (import library), `rabe_ffi.lib` (static library) in `target\release\`, and `rabe.h` in the project root.
